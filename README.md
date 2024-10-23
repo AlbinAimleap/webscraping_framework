@@ -13,6 +13,7 @@ This framework provides a streamlined way to initialize and configure:
 - Browser automation with Selenium
 - Secure HTTP requests via tls_client
 - Asynchronous HTTP operations using aiohttp
+- Schema validation with Pydantic
 
 ## Features
 
