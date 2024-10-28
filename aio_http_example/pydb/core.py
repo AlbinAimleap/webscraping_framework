@@ -1,14 +1,22 @@
-from typing import Type, Dict, ClassVar, List, Optional, Any
+import typing
+from typing import Type, Dict, ClassVar, List, Optional, Any, TypeVar, get_origin, get_args, Union
 from sqlalchemy import Column, Integer, String, Boolean, JSON, Float, Interval, Date
 from datetime import datetime, date, time
 from sqlalchemy.orm import Session
-from pydantic import BaseModel as PydanticBaseModel
-from aio_http.core.db import SessionLocal, Base, init_db
+from pydantic import BaseModel as PydanticBaseModel, ValidationError
+from pydb import SessionLocal, Base, init_db
 import inspect
+from pydb.s3_handler import S3Client
+from pydb.logger import logger
+from pydb.config import Config
+import json
+from dotenv import load_dotenv, find_dotenv
+
 
 from typing import TypeVar
 
 created_models: Dict[str, Type[Base]] = {}
+T = TypeVar('T', bound='BaseSchema')
 
 class BaseSchema(PydanticBaseModel):
     """Base Pydantic model with CRUD methods."""
@@ -30,30 +38,60 @@ class BaseSchema(PydanticBaseModel):
         super().__init__(**data)
         self.init_db()
     
+    @classmethod
+    @property
+    def s3_client(cls):
+        s3_client = None
+        if Config.AWS_ACCESS_KEY_ID and Config.AWS_SECRET_ACCESS_KEY:
+            s3_client = S3Client(Config.AWS_ACCESS_KEY_ID, Config.AWS_SECRET_ACCESS_KEY, Config.AWS_REGION)
+            s3_client.init_object(cls)
+        return s3_client
+    
+    @classmethod
+    @property
+    def get_current_database(cls) -> Optional[str]:
+        """Get the current database name directly from the session."""
+        session = SessionLocal()
+        try:
+            # Extract the database name directly from the session's bind
+            return session.bind.url.database
+        except Exception as e:
+            logger.error(f"Error getting current database name: {str(e)}")
+        finally:
+            session.close()
+    
     
     @classmethod
     def init_db(cls) -> None:
         """Create the corresponding table in the database."""
         model_class = create_sqlalchemy_model_from_pydantic(cls)
         Base.metadata.create_all(bind=SessionLocal().bind)
-        print(f"Table for {cls.__name__} created or already exists.")
+        logger.info(f"Get or Create Table: {model_class.__tablename__}")
 
     def save(self) -> None:
         """Save the current instance to the database."""
         session = SessionLocal()
         try:
             model_class = create_sqlalchemy_model_from_pydantic(self.__class__)
-            model_instance = model_class(**self.dict())
+            model_data = self.model_dump()
+            model_instance = model_class(**model_data)
             session.add(model_instance)
             session.commit()
-            print(f"Saved to {model_instance.__tablename__}")
+            logger.info(f"Saved to {model_instance.__tablename__}")
             return model_instance.id
         except Exception as e:
             session.rollback()
-            print("Error saving instance:", e)
+            logger.error(f"Error saving {self.__class__.__name__}: {str(e)}")
         finally:
-            session.close()
-
+            session.close()   
+                        
+    @classmethod
+    def query(cls):
+        """Return a query object for the model."""
+        session = SessionLocal()
+        model_class = create_sqlalchemy_model_from_pydantic(cls)
+        return session.query(model_class)    
+    
     @classmethod
     def get_by_id(cls, id: int) -> Optional["BaseSchema"]:
         """Retrieve an instance by its ID."""
@@ -66,7 +104,7 @@ class BaseSchema(PydanticBaseModel):
             return None
         finally:
             session.close()
-
+    
     @classmethod
     def update(cls, id: int, **kwargs: Any) -> Optional["BaseSchema"]:
         """Update an instance by its ID."""
@@ -119,8 +157,6 @@ class BaseSchema(PydanticBaseModel):
         finally:
             session.close()
 
-T = TypeVar('T', bound=PydanticBaseModel)
-
 def create_sqlalchemy_model_from_pydantic(pydantic_model: Type[T]) -> Type[Base]:
     """Creates an SQLAlchemy model class from a Pydantic model."""
     
@@ -135,9 +171,12 @@ def create_sqlalchemy_model_from_pydantic(pydantic_model: Type[T]) -> Type[Base]
     }
 
     for field_name, field_type in pydantic_model.__annotations__.items():
+        field_info = pydantic_model.model_fields[field_name]
+        
         if field_name == 'id':
             continue
         
+        nullable = get_origin(field_type) is Union and type(None) in get_args(field_type)
         if inspect.isclass(field_type) and issubclass(field_type, PydanticBaseModel):
             # Handle relationship to another model
             print("Found Relationnship")
@@ -146,24 +185,29 @@ def create_sqlalchemy_model_from_pydantic(pydantic_model: Type[T]) -> Type[Base]
             # Create a foreign key column for the related model
             attributes[field_name + "_id"] = Column(Integer, ForeignKey(f"{related_model_class.__tablename__}.id"))
             attributes[field_name] = relationship(related_model_class.__name__, back_populates=f"{field_name}_backref")
-        elif field_type == bool:
+            
+        elif field_type in [bool, typing.Optional[bool]]:
             column_type = Boolean
-        elif field_type == str:
+        elif field_type in [str, typing.Optional[str]]:
             column_type = String
-        elif field_type == int:
+        elif field_type in [int, typing.Optional[int]]:
             column_type = Integer
-        elif field_type == float:
+        elif field_type in [float, typing.Optional[float]]:
             column_type = Float
-        elif field_type == date:
+        elif field_type in [bool, typing.Optional[Date]]:
             column_type = Date
-        elif field_type == time:
+        elif field_type in [bool, typing.Optional[Time]]:
             column_type = Time
-        elif field_type == datetime:
+        elif field_type in [bool, typing.Optional[DateTime]]:
             column_type = DateTime
         else:
-            column_type = JSON
-
-        attributes[field_name] = Column(column_type, nullable=False)
+            column_type = String
+            
+        unique = False
+        if extra:= field_info.json_schema_extra:
+            unique = extra.get("unique")
+        
+        attributes[field_name] = Column(column_type, nullable=nullable, unique=unique)
 
     model_class = type(model_class_name, (Base,), attributes)
     created_models[model_class_name] = model_class

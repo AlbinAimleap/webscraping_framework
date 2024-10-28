@@ -1,16 +1,13 @@
 from typing import Type, Dict, ClassVar, List, Optional, Any
-from sqlalchemy import Column, Integer, String, Boolean, JSON, Float, Interval, Date
-from datetime import datetime, date, time
+from sqlalchemy import Column, Integer, String, Boolean, JSON
 from sqlalchemy.orm import Session
 from pydantic import BaseModel as PydanticBaseModel
 from aio_http.core.db import SessionLocal, Base, init_db
-import inspect
 
-from typing import TypeVar
 
 created_models: Dict[str, Type[Base]] = {}
 
-class BaseSchema(PydanticBaseModel):
+class BaseModel(PydanticBaseModel):
     """Base Pydantic model with CRUD methods."""
     id: ClassVar[int] = None
     
@@ -26,13 +23,8 @@ class BaseSchema(PydanticBaseModel):
             bytes: lambda v: v.decode(),
         }
     
-    def __init__(self, **data: Any):
-        super().__init__(**data)
-        self.init_db()
-    
-    
     @classmethod
-    def init_db(cls) -> None:
+    def init(cls) -> None:
         """Create the corresponding table in the database."""
         model_class = create_sqlalchemy_model_from_pydantic(cls)
         Base.metadata.create_all(bind=SessionLocal().bind)
@@ -47,7 +39,6 @@ class BaseSchema(PydanticBaseModel):
             session.add(model_instance)
             session.commit()
             print(f"Saved to {model_instance.__tablename__}")
-            return model_instance.id
         except Exception as e:
             session.rollback()
             print("Error saving instance:", e)
@@ -55,7 +46,7 @@ class BaseSchema(PydanticBaseModel):
             session.close()
 
     @classmethod
-    def get_by_id(cls, id: int) -> Optional["BaseSchema"]:
+    def get_by_id(cls, id: int) -> Optional["BaseModel"]:
         """Retrieve an instance by its ID."""
         session = SessionLocal()
         try:
@@ -68,7 +59,7 @@ class BaseSchema(PydanticBaseModel):
             session.close()
 
     @classmethod
-    def update(cls, id: int, **kwargs: Any) -> Optional["BaseSchema"]:
+    def update(cls, id: int, **kwargs: Any) -> Optional["BaseModel"]:
         """Update an instance by its ID."""
         session = SessionLocal()
         try:
@@ -109,26 +100,26 @@ class BaseSchema(PydanticBaseModel):
             session.close()
 
     @classmethod
-    def get_all(cls) -> List["BaseSchema"]:
+    def get_all(cls) -> List["BaseModel"]:
         """Retrieve all instances of the model."""
         session = SessionLocal()
         try:
             model_class = create_sqlalchemy_model_from_pydantic(cls)
             instances = session.query(model_class).all()
-            return [cls.from_orm(instance) for instance in instances]
+            return [cls.from_orm(instance) for instance in instances]  # Convert to Pydantic model instances
         finally:
             session.close()
 
-T = TypeVar('T', bound=PydanticBaseModel)
-
-def create_sqlalchemy_model_from_pydantic(pydantic_model: Type[T]) -> Type[Base]:
+def create_sqlalchemy_model_from_pydantic(pydantic_model: Type[PydanticBaseModel]) -> Type[Base]:
     """Creates an SQLAlchemy model class from a Pydantic model."""
     
     model_class_name = pydantic_model.__name__ + 'Model'
     
+    # Check if the model class already exists in the global dictionary
     if model_class_name in created_models:
         return created_models[model_class_name]
-    
+
+    # Define the new model attributes
     attributes = {
         "__tablename__": pydantic_model.__name__.lower(),
         "id": Column(Integer, primary_key=True, autoincrement=True),
@@ -136,35 +127,43 @@ def create_sqlalchemy_model_from_pydantic(pydantic_model: Type[T]) -> Type[Base]
 
     for field_name, field_type in pydantic_model.__annotations__.items():
         if field_name == 'id':
-            continue
+            continue  # Skip the id field, as it's already defined
         
-        if inspect.isclass(field_type) and issubclass(field_type, PydanticBaseModel):
-            # Handle relationship to another model
-            print("Found Relationnship")
-            related_model_class = create_sqlalchemy_model_from_pydantic(field_type)
-            related_model_class.save()
-            # Create a foreign key column for the related model
-            attributes[field_name + "_id"] = Column(Integer, ForeignKey(f"{related_model_class.__tablename__}.id"))
-            attributes[field_name] = relationship(related_model_class.__name__, back_populates=f"{field_name}_backref")
-        elif field_type == bool:
+        if field_type == bool:
             column_type = Boolean
         elif field_type == str:
             column_type = String
         elif field_type == int:
             column_type = Integer
-        elif field_type == float:
-            column_type = Float
-        elif field_type == date:
-            column_type = Date
-        elif field_type == time:
-            column_type = Time
-        elif field_type == datetime:
-            column_type = DateTime
         else:
             column_type = JSON
 
         attributes[field_name] = Column(column_type, nullable=False)
 
+    # Create the model class dynamically and store it in the global dictionary
     model_class = type(model_class_name, (Base,), attributes)
     created_models[model_class_name] = model_class
+
     return model_class
+
+class User(BaseModel):
+    name: str
+    age: int
+
+
+class TestModel(BaseModel):
+    name: str
+    age: int
+    
+TestModel.init()
+
+
+user = TestModel(name="John Doe", age=30)
+user.save()
+
+# Retrieve the user by ID
+retrieved_user = TestModel.get_by_id(1)
+print(retrieved_user)
+
+# Delete the user
+# User.delete(1)

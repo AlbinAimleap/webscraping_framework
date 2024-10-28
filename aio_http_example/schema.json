@@ -1,0 +1,74 @@
+{
+    "properties": {
+        "error": {
+            "title": "Error",
+            "type": "boolean"
+        },
+        "category": {
+            "title": "Category",
+            "type": "string"
+        },
+        "type": {
+            "title": "Type",
+            "type": "string"
+        },
+        "joke": {
+            "anyOf": [
+                {
+                    "type": "string"
+                },
+                {
+                    "type": "null"
+                }
+            ],
+            "default": null,
+            "title": "Joke"
+        },
+        "setup": {
+            "anyOf": [
+                {
+                    "type": "string"
+                },
+                {
+                    "type": "null"
+                }
+            ],
+            "default": null,
+            "title": "Setup"
+        },
+        "delivery": {
+            "anyOf": [
+                {
+                    "type": "string"
+                },
+                {
+                    "type": "null"
+                }
+            ],
+            "default": null,
+            "title": "Delivery"
+        },
+        "flags": {
+            "title": "Flags",
+            "type": "integer"
+        },
+        "safe": {
+            "title": "Safe",
+            "type": "boolean"
+        },
+        "lang": {
+            "title": "Lang",
+            "type": "string"
+        }
+    },
+    "required": [
+        "error",
+        "category",
+        "type",
+        "flags",
+        "safe",
+        "lang"
+    ],
+    "title": "Joke",
+    "type": "object"
+}
